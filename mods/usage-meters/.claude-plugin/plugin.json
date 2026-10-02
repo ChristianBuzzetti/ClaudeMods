@@ -1,0 +1,8 @@
+{
+  "name": "usage-meters",
+  "version": "0.1.0",
+  "description": "Animated usage strip above the prompt plus a Details pane: context window, 5-hour and weekly caps, cache hits, token flow and per-subagent spend",
+  "author": { "name": "Christian Buzzetti", "url": "https://github.com/ChristianBuzzetti" },
+  "repository": "https://github.com/ChristianBuzzetti/ClaudeMods",
+  "types": "./types/index.d.ts"
+}
