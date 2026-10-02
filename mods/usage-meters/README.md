@@ -30,9 +30,11 @@ Bars use a dithered dot fill with a sweeping shimmer and a glowing knob; a neon 
 
 | Command | Effect |
 | --- | --- |
-| `/meters` | Hides or shows the strip. |
+| `/meters` | Opens or closes the Details pane. |
+| `/meters hide` | Hides the strip. |
+| `/meters show` | Shows the strip again. |
 
-The pane closes with **Hide details**, Escape, or its own close mark.
+The pane also opens from the strip's **Details** button (in the terminal, focus the band with ctrl+x tab, then press `d`) and closes with **Hide details**, Escape, or its own close mark.
 
 ## Install
 
@@ -52,7 +54,7 @@ The mod is one hooks module, [`hooks/register.tsx`](hooks/register.tsx):
 | `ui.render` for `Pane` | Draws the Details pane. |
 | `ui.close` | Keeps the button's label in step with however the pane was closed. |
 
-On the desktop app the strip and the pane are SVG images built in the module, which is what allows the gradients, glow and animation. In the terminal they fall back to text bars with the same figures.
+On the desktop app the strip and the pane are SVG images built in the module, which is what allows the gradients, glow and animation. In the terminal they are `Raster` cell grids drawn by [`hooks/terminal.ts`](hooks/terminal.ts): shade-block bars that thicken toward a white knob, a shimmer sweeping each fill, and a neon comet circling the pane's border, repainted in place with `$.ui.blit` about seven times a second.
 
 All values live in `$.state`, declared in [`types/index.d.ts`](types/index.d.ts), so they survive a hot reload of the module.
 

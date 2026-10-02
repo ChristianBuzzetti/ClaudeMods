@@ -2,6 +2,8 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { AgentRun, Limit, Snapshot, Tokens, Totals } from '../types'
+import { encode, paintPane, paintStrip, paneRows, stripWidth } from './terminal'
+import type { PaneModel, StripModel } from './terminal'
 
 const NO_TOKENS: Tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
 const NO_TOTALS: Totals = { turns: 0, durationMs: 0, session: NO_TOKENS, main: NO_TOKENS, last: null }
@@ -22,7 +24,6 @@ const ACCENT = '#8b7cf6'
 const WARN = '#f59e0b'
 const DANGER = '#ef4444'
 const GOOD = '#22c55e'
-const TRACK = '#3f3f46'
 
 // Light end, dark end of each tone's gradient.
 const GRADIENTS: Record<string, [string, string]> = {
@@ -583,22 +584,71 @@ const stripSvg = ({ context, cache, running }: Strip) => {
 }
 
 // ---------------------------------------------------------------------------
-// Terminal fallback: text bars with a pill and quarter ticks.
+// Terminal: models for the Raster drawings in ./terminal.ts, and the registry
+// of mounted Rasters a clock repaints with $.ui.blit for the shimmer and neon.
 
-const barSegments = (percent: number, width: number, pill: string) => {
-  const label = ` ${pill} `
-  const filled = Math.round((Math.min(100, Math.max(0, percent)) / 100) * width)
-  const pillStart = Math.max(0, Math.min(width - label.length, filled - label.length))
-  const ticks = new Set([0.25, 0.5, 0.75].map(q => Math.round(q * width)))
-  const cell = (i: number) => (ticks.has(i) ? '┊' : '·')
-
-  let fill = ''
-  for (let i = 0; i < pillStart; i++) fill += i < filled ? '▪' : cell(i)
-  let track = ''
-  for (let i = pillStart + label.length; i < width; i++) track += i < filled ? '▪' : cell(i)
-
-  return { fill, label, track }
+const toneOfGauge = (tone: string) => {
+  const [light, dark] = GRADIENTS[tone] ?? FALLBACK_GRADIENT
+  return { light, dark }
 }
+
+const stripModel = (context: Gauge | undefined, cache: Gauge | undefined, running: number): StripModel => ({
+  meters: [context, cache]
+    .filter((gauge): gauge is Gauge => gauge !== undefined)
+    .map(gauge => ({
+      label: gauge.key === 'cache' ? 'Cache' : gauge.label,
+      percent: gauge.percent,
+      value: gauge.value,
+      tone: toneOfGauge(gauge.tone),
+    })),
+  running,
+})
+
+const paneModel = (gauges: Gauge[], sums: Totals, groups: AgentGroup[], cost: number | undefined): PaneModel => {
+  const total = allTokens(sums.session)
+  const header = [
+    sums.model ? sums.model.replace(/^claude-/, '') : null,
+    sums.turns > 0 ? `${sums.turns} turns · avg ${formatDuration(sums.durationMs / sums.turns)}` : null,
+    cost === undefined ? null : `$${cost.toFixed(2)}`,
+  ]
+    .filter((part): part is string => part !== null)
+    .join('  ·  ')
+  const runs = groups.reduce((n, group) => n + group.runs, 0)
+  const rows = [
+    { name: 'Conversation', detail: 'main loop', color: MAIN_COLOR, runs: 0, running: 0, tokens: sums.main },
+    ...groups.slice(0, 6).map(group => ({
+      name: group.type,
+      detail: group.latest,
+      color: group.color,
+      runs: group.runs,
+      running: group.running,
+      tokens: group.tokens,
+    })),
+  ]
+  return {
+    header,
+    gauges: gauges.map(gauge => ({ ...gauge, tone: toneOfGauge(gauge.tone) })),
+    flow: total === 0 ? [] : FLOW.map(kind => ({ label: kind.label, value: sums.session[kind.key], color: kind.color })),
+    flowTotal: `${compact(total)} tokens`,
+    agents:
+      total === 0 || groups.length === 0
+        ? []
+        : rows.map(row => ({
+            ...row,
+            share: (allTokens(row.tokens) / total) * 100,
+            tokens: compact(allTokens(row.tokens)),
+            hit: hitRate(row.tokens),
+          })),
+    runsLabel: `${runs} subagent run${runs === 1 ? '' : 's'}`,
+  }
+}
+
+type Mounted = { requestId: string; key: string; paint: (tick: number) => string }
+
+// Rasters drawn by the latest renders, repainted by the session clock. Module
+// state on purpose: a reload re-renders and refills it.
+const mounted = new Map<string, Mounted>()
+let tick = 0
 
 // Everything both views draw from, read once per render.
 async function figures($: EngineInterface) {
@@ -615,6 +665,20 @@ async function figures($: EngineInterface) {
   return { snap, sums, groups, gauges, context, cache, running, alt }
 }
 
+// Opens the details panel or closes it, deciding from the panes open now,
+// never from a flag a drawing captured. Resolves whether it is open after.
+async function togglePanel($: EngineInterface) {
+  const panes = await $.ui.panes()
+  if (panes.some(pane => pane.id === PANEL)) {
+    await update($, isPanelOpen, () => false)
+    await $.ui.close({ id: PANEL })
+    return false
+  }
+  await update($, isPanelOpen, () => true)
+  await $.ui.open({ id: PANEL, title: 'Usage', closeOnEscape: true, columns: 100, rows: 24 })
+  return true
+}
+
 // ---------------------------------------------------------------------------
 // Hooks
 
@@ -622,7 +686,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'meters',
-      description: 'Show or hide the usage meters above the prompt',
+      description: 'Open or close the usage details panel (args: hide, show)',
     })
     const usage = await $.session.usage()
     await update($, snapshot, () => toSnapshot(usage))
@@ -634,6 +698,17 @@ export const register: Register = on => {
     await update($, now, () => at)
     $.clock.every(60_000, () => {
       void $.clock.now().then(t => update($, now, () => t))
+    })
+    // Terminal shimmer and neon: repaint mounted Rasters in place, no render pass.
+    $.clock.every(140, () => {
+      tick += 1
+      for (const [id, raster] of mounted) {
+        void $.ui
+          .blit({ requestId: raster.requestId, key: raster.key, cells: raster.paint(tick) })
+          .then(result => {
+            if (result.deny) mounted.delete(id)
+          })
+      }
     })
 
     return next(e)
@@ -729,10 +804,15 @@ export const register: Register = on => {
     return next(e)
   })
 
-  on('command.run', { command: 'meters' }, async $ => {
-    const hidden = await update($, isHidden, value => !value)
-
-    return { text: hidden ? 'Usage meters hidden.' : 'Usage meters shown.' }
+  on('command.run', { command: 'meters' }, async ($, e) => {
+    const arg = e.args.trim().toLowerCase()
+    if (arg === 'hide' || arg === 'show') {
+      const hidden = arg === 'hide'
+      await update($, isHidden, () => hidden)
+      return { text: hidden ? 'Usage meters hidden.' : 'Usage meters shown.' }
+    }
+    const isOpen = await togglePanel($)
+    return { text: isOpen ? 'Usage details opened.' : 'Usage details closed.' }
   })
 
   // The panel's open state, kept in sync with every close: the strip's button, Escape, the pane's own mark.
@@ -751,16 +831,8 @@ export const register: Register = on => {
     }
 
     const isOpen = await read($, isPanelOpen)
-    // Decide from the panes open at press time, never from the flag this drawing captured.
-    const togglePanel = async () => {
-      const panes = await $.ui.panes()
-      if (panes.some(pane => pane.id === PANEL)) {
-        await update($, isPanelOpen, () => false)
-        await $.ui.close({ id: PANEL })
-        return
-      }
-      await update($, isPanelOpen, () => true)
-      await $.ui.open({ id: PANEL, title: 'Usage', closeOnEscape: true, columns: 100 })
+    const onToggle = async () => {
+      await togglePanel($)
     }
     const label = isOpen ? 'Hide details' : 'Details'
 
@@ -770,25 +842,20 @@ export const register: Register = on => {
       return (
         <Box paddingX={1} flexDirection="row" alignItems="center" gap={1}>
           <Svg source={stripSvg(f)} alt={`Usage: ${f.alt}; ${f.running} agents running`} />
-          <Button key="panel" label={label} plain dimColor onPress={togglePanel} />
+          <Button key="panel" label={label} plain dimColor onPress={onToggle} />
         </Box>
       )
     }
 
-    const { Box, Button, Text } = $.ui.resolve(e)
-    const parts = [
-      f.context ? `context ${f.context.value}%` : null,
-      f.cache ? `cache ${f.cache.value}%` : null,
-      f.running > 0 ? `${f.running} agent${f.running === 1 ? '' : 's'} running` : 'no agents running',
-    ].filter((part): part is string => part !== null)
+    const { Box, Button, Raster } = $.ui.resolve(e)
+    const model = stripModel(f.context, f.cache, f.running)
+    const paint = (t: number) => encode(paintStrip(model, t))
+    mounted.set('strip', { requestId: e.requestId, key: 'strip', paint })
 
     return (
-      <Box paddingX={1} flexDirection="row">
-        <Text color={f.running > 0 ? ACCENT : TRACK}>● </Text>
-        <Text dimColor wrap="truncate">
-          {parts.join('  ·  ')}{' '}
-        </Text>
-        <Button key="panel" label={isOpen ? '−' : '+'} plain onPress={togglePanel} />
+      <Box paddingX={1} flexDirection="row" gap={1}>
+        <Raster key="strip" columns={stripWidth(model)} rows={1} cells={paint(tick)} />
+        <Button key="panel" label={isOpen ? 'hide details' : 'details'} hotkey="d" plain onPress={onToggle} />
       </Box>
     )
   })
@@ -810,55 +877,15 @@ export const register: Register = on => {
       )
     }
 
-    const { Box, Text } = $.ui.resolve(e)
+    const { Raster, Text } = $.ui.resolve(e)
     if (f === null || f.gauges.length === 0) {
       return <Text dimColor>Waiting for the first measurement…</Text>
     }
-    const { gauges, sums, groups } = f
-    const labelWidth = 16
-    const tailWidth = 18
-    const barWidth = Math.max(12, e.props.bodyColumns - labelWidth - tailWidth - 2)
-    const total = allTokens(sums.session)
+    const model = paneModel(f.gauges, f.sums, f.groups, f.snap.costUsd)
+    const columns = Math.max(40, e.props.bodyColumns)
+    const paint = (t: number) => encode(paintPane(model, columns, t))
+    mounted.set('pane', { requestId: e.requestId, key: 'pane', paint })
 
-    return (
-      <Box flexDirection="column">
-        {gauges.map(gauge => {
-          const tone = gauge.tone
-          const bar = barSegments(gauge.percent, barWidth, gauge.sub)
-
-          return (
-            <Box key={gauge.key} flexDirection="row">
-              <Box width={labelWidth}>
-                <Text color={tone}>● </Text>
-                <Text wrap="truncate">{gauge.label}</Text>
-              </Box>
-              <Text>
-                <Text color={tone}>{bar.fill}</Text>
-                <Text color="#ffffff" backgroundColor={tone} bold>
-                  {bar.label}
-                </Text>
-                <Text color={TRACK}>{bar.track}</Text>
-              </Text>
-              <Box width={tailWidth} justifyContent="flex-end">
-                <Text bold color={tone}>
-                  {`${gauge.value}%`.padStart(4)}
-                </Text>
-                <Text dimColor>{`  ${gauge.note}`.padEnd(11)}</Text>
-              </Box>
-            </Box>
-          )
-        })}
-        {total > 0 && groups.length > 0 ? (
-          <Box paddingLeft={2}>
-            <Text dimColor wrap="truncate">
-              {[
-                `conversation ${Math.round((allTokens(sums.main) / total) * 100)}%`,
-                ...groups.map(group => `${group.type} ×${group.runs} ${Math.round((allTokens(group.tokens) / total) * 100)}%`),
-              ].join('  ·  ')}
-            </Text>
-          </Box>
-        ) : null}
-      </Box>
-    )
+    return <Raster key="pane" columns={columns} rows={paneRows(model)} cells={paint(tick)} />
   })
 }
