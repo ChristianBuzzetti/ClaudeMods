@@ -64,3 +64,7 @@ All values live in `$.state`, declared in [`types/index.d.ts`](types/index.d.ts)
 - **Subagents that started before the mod loaded** show as `subagent`, since their type was announced before the mod could record it.
 - **The pane's placement belongs to Claude Code**: docked beside the transcript where the surface supports it, otherwise above the prompt. A mod cannot open a floating window.
 - **No tooltips.** The SVGs are drawn as images, which keeps them sized to the available width but takes no pointer input.
+
+## License
+
+[MIT](../../LICENSE).

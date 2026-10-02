@@ -69,3 +69,7 @@ mods/
 3. Add a row to the table above and a `README.md` in the mod folder.
 
 Inside a Claude Code session, the bundled `plugin-authoring` skill documents the full hook API for the running build and hot-reloads a mod while you edit it.
+
+## License
+
+[MIT](LICENSE): free to use, modify and share, in personal and commercial work. Every mod in this repository is covered unless its folder says otherwise.
