@@ -1,2 +1,4 @@
 * text=auto eol=lf
 *.svg text eol=lf
+# Built by mods/boberto/build/make-engine.mjs from the engine source: keep it byte-for-byte as generated.
+mods/boberto/hooks/engine.generated.mjs -whitespace linguist-generated

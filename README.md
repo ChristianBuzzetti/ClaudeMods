@@ -9,6 +9,7 @@ A collection of mods for [Claude Code](https://claude.com/claude-code): plugins 
 | Mod | What it does |
 | --- | --- |
 | [usage-meters](mods/usage-meters) | An animated strip above the prompt with context, cache hits and running subagents, plus a **Details** pane with the 5-hour and weekly caps, token flow and per-subagent spend. |
+| [boberto](mods/boberto) | A bat-winged mascot drawn at run time by his own Canvas engine (recorded as SVG): a pane with a **Customize** wardrobe and random idle gestures, and an animated reaction under each reply on desktop (a face on the terminal turn row). |
 
 ## Install a mod
 

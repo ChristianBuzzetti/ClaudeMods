@@ -1,0 +1,12 @@
+{
+  "name": "boberto",
+  "version": "0.1.0",
+  "description": "Boberto, a bat-winged mascot drawn at run time by its own Canvas engine: a pane with a wardrobe and idle gestures, and an animated reaction under each assistant reply",
+  "author": {
+    "name": "Christian Buzzetti",
+    "url": "https://github.com/ChristianBuzzetti"
+  },
+  "repository": "https://github.com/ChristianBuzzetti/ClaudeMods",
+  "license": "MIT",
+  "types": "./types/index.d.ts"
+}
