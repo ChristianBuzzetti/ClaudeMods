@@ -8,7 +8,9 @@ He is not a sprite sheet. His own vector engine draws him at run time on a Canva
 
 ## Where he appears
 
-- **His pane** (desktop app): Boberto at full size, with a word on what he is doing. A folding **Customize** section holds his wardrobe: accessory, body color, eye color and glow. When he is idle he plays a random gesture from time to time. On the terminal the pane holds a single line of text saying what he is doing.
+- **His pane** (desktop app): Boberto at full size, with a word on what he is doing, and his **wardrobe** under a *Customize* toggle. The wardrobe has a tab per part (**Accessory**, **Body**, **Eyes**, **Glow**), each with the engine's presets or **Custom RGB**: a color card with a swatch, the hex, a hex field and one row per channel (a gradient bar, a 0–255 field and ±16 steps). **Shuffle** and **Reset** sit at the bottom.
+
+  ![The wardrobe's custom color card](assets/wardrobe-color.svg) When he is idle he plays a random gesture from time to time. On the terminal the pane holds a single line of text saying what he is doing.
 - **Under each reply** (desktop app): the assistant row that ends a turn gets a small looping Boberto. A finished answer gets one of his gestures; an error or refusal makes him dizzy; an interrupted turn shows him calm.
 - **The turn row** (terminal): the line with the turn's duration gets a text face and a word for how the turn ended.
 
@@ -23,6 +25,7 @@ The outfit is saved and comes back in later sessions.
 | `/boberto <gesture>` | Plays one gesture now: `guitarra`, `skate`, `mate`, `rubik`, `selfie`, `yoyo`, `malabares`, `pesca`, `pintor`, `cafe`, `avion`, `baila`, `levita`, `burbuja`. |
 | `/boberto shuffle` | Puts on a random outfit. |
 | `/boberto reset` | Goes back to the default bat wings. |
+| `/boberto color <body\|accessory\|eyes\|glow> <#hex\|auto>` | Sets a custom color for that part, or `auto` to clear it. |
 | `/boberto next` or `/boberto <state>` | Pins a preview of a live state (`idle`, `working`, `searching`, `thinking`, `celebrate`, `dizzy`, `sleep`, `calm`). |
 | `/boberto auto` | Stops the preview, so he follows the session again. |
 

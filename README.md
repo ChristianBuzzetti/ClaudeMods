@@ -10,7 +10,11 @@ A collection of mods for [Claude Code](https://claude.com/claude-code): plugins 
 
 Boberto is a small bat-winged mascot who keeps you company while Claude works. He types on his laptop while tools run, picks up a magnifier when Claude reads or searches, celebrates a finished answer, gets dizzy when something fails and naps when the session goes quiet. When he is idle he plays the guitar, rides a skateboard, drinks mate or solves a Rubik's cube.
 
-He is drawn at run time by his own vector engine, not from a sprite sheet. You can dress him up with any of his 32 accessories, a body color, eye color and glow. Every answer ends with a different gesture of his. Open his pane with `/boberto`, and see [his README](mods/boberto) for all the commands.
+He is drawn at run time by his own vector engine, not from a sprite sheet. Every answer ends with a different gesture of his. Open his pane with `/boberto`, and see [his README](mods/boberto) for all the commands.
+
+His pane has a wardrobe: any of his 32 accessories, and a color for the accessory, body, eyes and glow, either from the engine's presets or any RGB you like.
+
+<img src="mods/boberto/assets/wardrobe-color.svg" alt="Boberto's custom RGB color card" width="242">
 
 ## Mods
 

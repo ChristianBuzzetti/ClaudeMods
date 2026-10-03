@@ -11,7 +11,18 @@ export type BobertoOutfit = {
   eye: string
   /** 'none' or the hex color of a halo around him. */
   glow: string
+  /** A custom body color (`#rrggbb`); the engine derives its shades. Wins over `skin`. */
+  skinHex?: string
+  /** A custom accessory color (`#rrggbb`), tinted as the engine's own accessory colors. */
+  hatHex?: string
+  /** A custom iris color (`#rrggbb`). Wins over `eye`. */
+  eyeHex?: string
+  /** A custom halo color (`#rrggbb`). Wins over `glow`. */
+  glowHex?: string
 }
+
+/** What the wardrobe's RGB editor can color. */
+export type BobertoColorTarget = 'skin' | 'hat' | 'eye' | 'glow'
 
 /** A phase of the chat, one chip of the status timeline. */
 export type BobertoPhase =
@@ -75,6 +86,12 @@ declare module 'claude-code' {
       outcomes: BobertoTurnOutcome[]
       /** Whether the pane's wardrobe (the customization controls) is unfolded. */
       isWardrobeOpen: boolean
+      /** The wardrobe's open tab: the part its controls dress and its RGB card edits. */
+      wardrobeTab: BobertoColorTarget
+      /** A part whose RGB card was opened with Custom while its color still matches a preset, or null. */
+      colorEditing: BobertoColorTarget | null
+      /** A short note on the last color typed that could not be read, or null. */
+      colorError: string | null
     }
   }
 }

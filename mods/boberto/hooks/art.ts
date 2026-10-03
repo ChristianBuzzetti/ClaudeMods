@@ -7,7 +7,7 @@ import { assembleSvg } from './assemble'
 import type { AssembleOptions, BobertoAnimation, BobertoStep } from './assemble'
 import { GESTURE_MOTION, LIVE_SPECS } from './choreo'
 import type { LiveName } from './choreo'
-import { drawPoses, outfitKey, recordGesture, toAnimation } from './engine-host'
+import { drawPoses, glowColor, outfitKey, recordGesture, toAnimation } from './engine-host'
 import type { Outfit } from './engine-host'
 import type { BobertoPhase, BobertoTimelineEntry } from '../types'
 
@@ -70,7 +70,7 @@ function remember(key: string, svg: string) {
   return svg
 }
 
-const glowOf = (outfit: Outfit) => (outfit.glow === 'none' ? undefined : outfit.glow)
+const glowOf = (outfit: Outfit) => glowColor(outfit)
 
 /** One live state, looping (or played once). */
 export function liveSvg(name: LiveName, outfit: Outfit, quality: Quality, once = false): string {

@@ -22,6 +22,14 @@ export type Outfit = {
   eye: string
   /** 'none' or a hex color for a drop-shadow halo. */
   glow: string
+  /** A custom body color: the engine's `setSkinColor`, shades by its `derivePal`. */
+  skinHex?: string
+  /** A custom accessory color: the engine's `setHatColor` (its `resolveHatColors`). */
+  hatHex?: string
+  /** A custom iris color: the engine's `setEyeColor`. */
+  eyeHex?: string
+  /** A custom halo color. */
+  glowHex?: string
 }
 
 export const DEFAULT_OUTFIT: Outfit = { hat: 'alasmurcielago', skin: 'auto', eye: 'auto', glow: 'none' }
@@ -169,8 +177,17 @@ async function settle() {
 
 type Recorder = { ctx: SvgContext; dirty: boolean }
 
+/** The engine's color setters the generated types leave out (window.BOBERTO has them). */
+type ColorApi = {
+  /** Sets skin 'custom' and derives the whole body palette from one base color. */
+  setSkinColor(hex: string): void
+  /** The accessory material; '' restores the engine's default graphite. */
+  setHatColor(hex: string): void
+  listHatColors(): { id: string; name: string }[]
+}
+
 type Host = {
-  api: BobertoEngine
+  api: BobertoEngine & ColorApi
   clock: VirtualClock
   /** The recorder the next `createElement('canvas')` gets. */
   pending: Recorder | null
@@ -182,7 +199,7 @@ let host: Host | null = null
 function boot(): Host {
   if (host !== null) return host
   const clock = new VirtualClock()
-  const state: Host = { api: null as unknown as BobertoEngine, clock, pending: null, outfit: '' }
+  const state: Host = { api: null as unknown as Host['api'], clock, pending: null, outfit: '' }
 
   const createElement = (tag: string) => {
     const el = element(tag)
@@ -274,7 +291,7 @@ function boot(): Host {
   window['window'] = window
   window['self'] = window
 
-  state.api = bootEngine(window as never)
+  state.api = bootEngine(window as never) as Host['api']
   host = state
   return state
 }
@@ -286,19 +303,26 @@ export function engineOptions() {
     hats: api.listHats().map(x => ({ id: x.id, name: x.name })),
     skins: api.listSkins().map(x => ({ id: x.id, name: x.name, color: x.color })),
     eyes: api.listEyes().map(x => ({ id: x.id, name: x.name })),
+    hatColors: api.listHatColors().map(x => ({ id: x.id, name: x.name })),
     gestures: api.listGestures().map(x => ({ id: x.id, name: x.name })),
     poses: api.listPoses(),
   }
 }
 
-const outfitKey = (o: Outfit) => `${o.hat}|${o.skin}|${o.eye}|${o.glow}`
+const outfitKey = (o: Outfit) =>
+  `${o.hat}|${o.skin}|${o.eye}|${o.glow}|${o.skinHex ?? ''}|${o.hatHex ?? ''}|${o.eyeHex ?? ''}|${o.glowHex ?? ''}`
 
-/** Points the engine's chosen skin and eyes at `outfit` (the hat goes per draw). */
+/** The halo color `outfit` shows, or undefined for none. */
+export const glowColor = (o: Outfit) => o.glowHex ?? (o.glow === 'none' ? undefined : o.glow)
+
+/** Points the engine's chosen skin, eyes and accessory color at `outfit` (the hat goes per draw). */
 function wear(h: Host, outfit: Outfit) {
-  const key = `${outfit.skin}|${outfit.eye}`
+  const key = `${outfit.skin}|${outfit.eye}|${outfit.skinHex ?? ''}|${outfit.eyeHex ?? ''}|${outfit.hatHex ?? ''}`
   if (h.outfit === key) return
-  h.api.setSkin(outfit.skin)
-  h.api.setEyeColor(outfit.eye)
+  if (outfit.skinHex !== undefined) h.api.setSkinColor(outfit.skinHex)
+  else h.api.setSkin(outfit.skin)
+  h.api.setEyeColor(outfit.eyeHex ?? outfit.eye)
+  h.api.setHatColor(outfit.hatHex ?? '')
   h.outfit = key
 }
 

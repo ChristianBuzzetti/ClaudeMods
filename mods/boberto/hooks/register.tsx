@@ -3,6 +3,7 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type {
   BobertoAnimationName,
+  BobertoColorTarget,
   BobertoOutfit,
   BobertoPhase,
   BobertoTimelineEntry,
@@ -21,6 +22,20 @@ import {
   timelineSvg,
 } from './art'
 import { LIVE, TOP_GESTURES } from './choreo'
+import {
+  CHANNEL_BAR,
+  SWATCH_CARD,
+  channelBarSvg,
+  hexToRgb,
+  isHex,
+  labelSvg,
+  parseByte,
+  parseColor,
+  randomHex,
+  swatchCardSvg,
+  withChannel,
+} from './color'
+import type { Rgb } from './color'
 import { DEFAULT_OUTFIT, engineOptions } from './engine-host'
 
 // ---------------------------------------------------------------------------
@@ -35,6 +50,9 @@ const outfit = atom({ plugin: 'boberto', key: 'outfit' } as const, DEFAULT_OUTFI
 const timeline = atom({ plugin: 'boberto', key: 'timeline' } as const, [])
 const outcomes = atom({ plugin: 'boberto', key: 'outcomes' } as const, [])
 const isWardrobeOpen = atom({ plugin: 'boberto', key: 'isWardrobeOpen' } as const, false)
+const wardrobeTab = atom({ plugin: 'boberto', key: 'wardrobeTab' } as const, 'hat')
+const colorEditing = atom({ plugin: 'boberto', key: 'colorEditing' } as const, null)
+const colorError = atom({ plugin: 'boberto', key: 'colorError' } as const, null)
 
 const ORDER: BobertoAnimationName[] = [...LIVE]
 
@@ -143,6 +161,54 @@ const GLOWS: { value: string; label: string }[] = [
   { value: '#ffffff', label: 'White' },
 ]
 
+// Custom colors: each target's outfit field, its name, and the engine's own default it starts from.
+const HEX_FIELD: Record<BobertoColorTarget, 'skinHex' | 'hatHex' | 'eyeHex' | 'glowHex'> = {
+  skin: 'skinHex',
+  hat: 'hatHex',
+  eye: 'eyeHex',
+  glow: 'glowHex',
+}
+const TARGETS: BobertoColorTarget[] = ['skin', 'hat', 'eye', 'glow']
+const TARGET_NAMES: Record<BobertoColorTarget, string> = { skin: 'Body', hat: 'Accessory', eye: 'Eyes', glow: 'Glow' }
+/** What `/boberto color` accepts for each target. */
+const TARGET_WORDS: Record<string, BobertoColorTarget> = {
+  body: 'skin',
+  skin: 'skin',
+  accessory: 'hat',
+  acc: 'hat',
+  hat: 'hat',
+  eyes: 'eye',
+  eye: 'eye',
+  glow: 'glow',
+  halo: 'glow',
+}
+const CUSTOM = 'custom'
+/** The engine's PALS.default body color, its HAT_DARK accessory, and its natural iris. */
+const ENGINE_BODY = '#d96c3f'
+const ENGINE_ACCESSORY = '#2a2c34'
+const ENGINE_IRIS = '#ffd98a'
+const GLOW_SEED = '#8b7cf6'
+const HAT_COLOR_NAMES: Record<string, string> = {
+  '#2a2c34': 'Graphite',
+  '#ffffff': 'White',
+  '#5b8cff': 'Blue',
+  '#10b981': 'Emerald',
+  '#f59e0b': 'Amber',
+  '#f43f5e': 'Red',
+  '#ec4899': 'Pink',
+  '#bd93f9': 'Violet',
+  '#39ff14': 'Neon',
+  '#ff7a3d': 'Orange',
+}
+const STEP = 16
+/** The wardrobe's tabs, in order. */
+const TABS: BobertoColorTarget[] = ['hat', 'skin', 'eye', 'glow']
+/** Below this many pane columns the channel rows drop their bars. */
+const BARS_FROM_COLUMNS = 46
+const CHANNEL_LETTER_COLORS: Record<keyof Rgb, string> = { r: '#f87171', g: '#4ade80', b: '#60a5fa' }
+const BAD_COLOR = 'Not a color: try #ff3366, f36 or 255,51,102'
+const BAD_CHANNEL = 'A channel is a whole number from 0 to 255'
+
 const SLEEP_AFTER_MS = 10 * 60_000
 const CELEBRATE_MS = 3000
 const DIZZY_MS = 2600
@@ -213,7 +279,7 @@ function sanitize(value: unknown): BobertoOutfit {
   const v = (typeof value === 'object' && value !== null ? value : {}) as Partial<Record<keyof BobertoOutfit, unknown>>
   const oneOf = (x: unknown, allowed: string[], fallback: string) =>
     typeof x === 'string' && allowed.includes(x) ? x : fallback
-  return {
+  const clean: BobertoOutfit = {
     hat: oneOf(
       v.hat,
       o.hats.map(h => h.id),
@@ -227,6 +293,44 @@ function sanitize(value: unknown): BobertoOutfit {
       DEFAULT_OUTFIT.glow,
     ),
   }
+  // Custom colors are kept only in their canonical form; outfits stored before them have none.
+  for (const target of TARGETS) {
+    const hex = v[HEX_FIELD[target]]
+    if (isHex(hex)) clean[HEX_FIELD[target]] = hex
+  }
+  return clean
+}
+
+/** The color a target shows now: its custom color, else the preset's or the engine's own. */
+function currentHex(o: BobertoOutfit, target: BobertoColorTarget): string {
+  switch (target) {
+    case 'skin':
+      return o.skinHex ?? optionsOf().skins.find(s => s.id === o.skin)?.color ?? ENGINE_BODY
+    case 'hat':
+      return o.hatHex ?? ENGINE_ACCESSORY
+    case 'eye':
+      return o.eyeHex ?? (o.eye === 'auto' ? ENGINE_IRIS : o.eye)
+    case 'glow':
+      return o.glowHex ?? (o.glow === 'none' ? GLOW_SEED : o.glow)
+  }
+}
+
+/** `o` with a target's custom color set, or cleared with undefined. */
+function withHex(o: BobertoOutfit, target: BobertoColorTarget, hex: string | undefined): BobertoOutfit {
+  const next = { ...o }
+  const field = HEX_FIELD[target]
+  if (hex === undefined) delete next[field]
+  else next[field] = hex
+  return next
+}
+
+/** A few words on what he wears, for the command's answers. */
+function describe(o: BobertoOutfit) {
+  const body = o.skinHex ?? SKIN_NAMES[o.skin] ?? o.skin
+  const eyes = o.eyeHex ?? EYE_NAMES[o.eye] ?? o.eye
+  const glow = o.glowHex ?? (o.glow === 'none' ? null : (GLOWS.find(g => g.value === o.glow)?.label ?? o.glow))
+  const tint = o.hatHex === undefined ? '' : ` in ${HAT_COLOR_NAMES[o.hatHex] ?? o.hatHex}`
+  return `${HAT_NAMES[o.hat] ?? o.hat}${tint}, ${body} body, ${eyes} eyes, ${glow === null ? 'no glow' : `${glow} glow`}`
 }
 
 function shuffled(): BobertoOutfit {
@@ -236,7 +340,66 @@ function shuffled(): BobertoOutfit {
     skin: pick(['auto', ...o.skins.map(s => s.id)]) ?? 'auto',
     eye: pick(['auto', ...o.eyes.map(e => e.id)]) ?? 'auto',
     glow: Math.random() < 0.4 ? 'none' : (pick(GLOWS.slice(1))?.value ?? 'none'),
+    // Now and then a custom color instead of a preset.
+    ...(Math.random() < 0.25 ? { skinHex: randomHex() } : {}),
+    ...(Math.random() < 0.3 ? { hatHex: randomHex() } : {}),
+    ...(Math.random() < 0.2 ? { eyeHex: randomHex() } : {}),
+    ...(Math.random() < 0.15 ? { glowHex: randomHex() } : {}),
   }
+}
+
+/** The wardrobe header's one-line summary: "bat wings · #ff3366 body · cyan eyes · violet glow". */
+function summarize(o: BobertoOutfit) {
+  const hat = (HAT_NAMES[o.hat] ?? o.hat).toLowerCase()
+  const body = o.skinHex ?? (SKIN_NAMES[o.skin] ?? o.skin).toLowerCase()
+  const eyes = o.eyeHex ?? (EYE_NAMES[o.eye] ?? o.eye).toLowerCase()
+  const glow = o.glowHex ?? (o.glow === 'none' ? null : (GLOWS.find(g => g.value === o.glow)?.label ?? o.glow).toLowerCase())
+  const tint = o.hatHex === undefined ? '' : ` ${o.hatHex}`
+  return [`${hat}${tint}`, `${body} body`, `${eyes} eyes`, ...(glow === null ? [] : [`${glow} glow`])].join(' · ')
+}
+
+/** A preset Select's pick for a colored target: a preset clears its custom color, Custom opens its RGB card. */
+async function pickColor($: EngineInterface, target: BobertoColorTarget, value: string) {
+  if (value === CUSTOM) {
+    // Starts from the color shown now, so choosing Custom alone changes nothing.
+    await dress($, o => withHex(o, target, currentHex(o, target)))
+    await update($, colorEditing, () => target)
+    await update($, colorError, () => null)
+    return
+  }
+  await update($, colorEditing, editing => (editing === target ? null : editing))
+  await update($, colorError, () => null)
+  if (target === 'hat') {
+    await dress($, o => withHex(o, 'hat', isHex(value) ? value : undefined))
+    return
+  }
+  const field = target === 'skin' ? 'skin' : target === 'eye' ? 'eye' : 'glow'
+  await dress($, o => withHex({ ...o, [field]: value }, target, undefined))
+}
+
+/** A color typed or stepped in the RGB card, applied to the open tab's part (read live). */
+async function editColor($: EngineInterface, next: (current: string) => string | null, problem: string) {
+  const target = await read($, wardrobeTab)
+  const hex = next(currentHex(await read($, outfit), target))
+  if (hex === null) {
+    await update($, colorError, () => problem)
+    return
+  }
+  await update($, colorError, () => null)
+  await dress($, o => withHex(o, target, hex))
+}
+
+/** Opens one tab of the wardrobe, its last note cleared. */
+async function openTab($: EngineInterface, tab: BobertoColorTarget) {
+  await update($, wardrobeTab, () => tab)
+  await update($, colorError, () => null)
+}
+
+/** Back to the default outfit, the RGB card closed. */
+async function resetOutfit($: EngineInterface) {
+  await dress($, () => DEFAULT_OUTFIT)
+  await update($, colorEditing, () => null)
+  await update($, colorError, () => null)
 }
 
 /** Applies a change to the outfit, keeps it in the store, and stops a gesture drawn in the old one. */
@@ -423,8 +586,8 @@ export const register: Register = on => {
     await $.command.register({
       name: 'boberto',
       description:
-        "Open or close Boberto's panel; next cycles a preview, a name pins one, auto returns to live, shuffle or reset his outfit",
-      argumentHint: '[guitarra|skate|mate|…|shuffle|auto|help]',
+        "Open or close Boberto's panel; next cycles a preview, a name pins one, auto returns to live, shuffle, reset or color his outfit",
+      argumentHint: '[guitarra|skate|mate|…|shuffle|color <part> <#hex>|auto|help]',
     })
     await update($, outfit, () => DEFAULT_OUTFIT)
     const stored = await $.store.get(STORE_KEY)
@@ -520,6 +683,7 @@ export const register: Register = on => {
           '/boberto: open or close his panel',
           `/boberto <gesture>: play one now (${TOP_GESTURES.join(', ')})`,
           '/boberto shuffle | reset: new random outfit, or back to bat wings',
+          '/boberto color <body|accessory|eyes|glow> <#hex|auto>: a custom RGB color (#rrggbb, #rgb, r,g,b); auto clears it',
           `/boberto next | <state>: pin a preview of a live state (${ORDER.join(', ')})`,
           '/boberto auto: follow the session again',
         ].join('\n'),
@@ -532,12 +696,25 @@ export const register: Register = on => {
     }
     if (arg === 'shuffle') {
       const o = await dress($, () => shuffled())
-      return {
-        text: `Boberto shuffled: ${HAT_NAMES[o.hat] ?? o.hat}, ${SKIN_NAMES[o.skin] ?? o.skin} body, ${EYE_NAMES[o.eye] ?? o.eye} eyes, ${GLOWS.find(g => g.value === o.glow)?.label ?? o.glow}.`,
+      return { text: `Boberto shuffled: ${describe(o)}.` }
+    }
+    if (arg === 'color' || arg.startsWith('color ')) {
+      const [, word = '', ...rest] = arg.split(/\s+/)
+      const target = TARGET_WORDS[word]
+      const value = rest.join(' ')
+      const usage = 'Usage: /boberto color <body|accessory|eyes|glow> <#hex|auto>, e.g. /boberto color eyes #00ff88'
+      if (target === undefined || value === '') return { text: usage }
+      if (value === 'auto') {
+        const o = await dress($, x => withHex(x, target, undefined))
+        return { text: `Boberto's ${TARGET_NAMES[target].toLowerCase()} color is back to its preset: ${describe(o)}.` }
       }
+      const hex = parseColor(value)
+      if (hex === null) return { text: `"${value}" is not a color. ${usage}` }
+      const o = await dress($, x => withHex(x, target, hex))
+      return { text: `Boberto's ${TARGET_NAMES[target].toLowerCase()} color is now ${hex}: ${describe(o)}.` }
     }
     if (arg === 'reset') {
-      await dress($, () => DEFAULT_OUTFIT)
+      await resetOutfit($)
       await $.store.delete(STORE_KEY)
       return { text: 'Boberto is back in his bat wings.' }
     }
@@ -548,7 +725,7 @@ export const register: Register = on => {
     }
     if (arg !== 'next' && !isAnimationName(arg)) {
       return {
-        text: `Unknown option "${arg}". Try next, auto, shuffle, reset, a gesture (${TOP_GESTURES.join(', ')}) or one of: ${ORDER.join(', ')}.`,
+        text: `Unknown option "${arg}". Try next, auto, shuffle, reset, color, a gesture (${TOP_GESTURES.join(', ')}) or one of: ${ORDER.join(', ')}.`,
       }
     }
     const pinned = await update($, preview, value => {
@@ -586,10 +763,204 @@ export const register: Register = on => {
       alt = LABELS[name]
     }
 
-    const { Box, Button, Select, Svg, Text } = $.ui.resolve(e)
-    const set = (field: keyof BobertoOutfit) => (value: string) => void dressField($, field, value)
+    const { Box, Button, Input, Select, Svg, Text } = $.ui.resolve(e)
     const isOpen = await read($, isWardrobeOpen)
+    const tab = await read($, wardrobeTab)
+    const editing = await read($, colorEditing)
+    const problem = await read($, colorError)
+    const columns = e.props.bodyColumns
+    const hasBars = columns >= BARS_FROM_COLUMNS
+    // Handlers read live state when they run; nothing here is written while drawing.
     const toggleWardrobe = () => void update($, isWardrobeOpen, value => !value)
+    const choose = (target: BobertoColorTarget) => (value: string) => void pickColor($, target, value)
+    const custom = { value: CUSTOM, label: 'Custom RGB…' }
+    const hatColorPreset = attire.hatHex !== undefined && o.hatColors.some(c => c.id === attire.hatHex)
+    /** Whether a part shows its RGB card: a custom color, or Custom picked over a matching preset. */
+    const isCustom = (target: BobertoColorTarget) =>
+      editing === target ||
+      (target === 'hat' ? attire.hatHex !== undefined && !hatColorPreset : attire[HEX_FIELD[target]] !== undefined)
+    const presetValue = (target: BobertoColorTarget, preset: string) => (isCustom(target) ? CUSTOM : preset)
+
+    const label = labelSvg('Wardrobe')
+    const header = (
+      <Box key="wardrobe-head" flexDirection="row" alignItems="center" gap={1} width="100%">
+        <Svg source={label.source} alt="Wardrobe" height={14} width={label.width} />
+        <Box flexGrow={1} flexShrink={1} minWidth={0}>
+          <Text dimColor wrap="truncate-end">
+            {summarize(attire)}
+          </Text>
+        </Box>
+        <Button key="wardrobe" label={isOpen ? 'Done ▴' : 'Customize ▾'} variant="secondary" onPress={toggleWardrobe} />
+      </Box>
+    )
+
+    if (!isOpen) {
+      return (
+        <Box flexDirection="column" alignItems="center" paddingY={1} gap={1}>
+          <Svg source={svg} alt={alt} height={PANEL_HEIGHT} width={Math.round(PANEL_HEIGHT * aspectOf(svg))} />
+          <Text dimColor>
+            {status}
+            {isPinned ? ' · preview' : ''}
+          </Text>
+          <Box flexDirection="column" width="100%" paddingX={1}>
+            {header}
+          </Box>
+        </Box>
+      )
+    }
+
+    // One channel row: the letter, its bar (when there is room), the value field, and ∓16 steps.
+    const channelRow = (c: keyof Rgb, value: number) => (
+      <Box key={`row-${c}`} flexDirection="row" gap={1} alignItems="center">
+        <Box width={2}>
+          <Text color={CHANNEL_LETTER_COLORS[c]} bold>
+            {c.toUpperCase()}
+          </Text>
+        </Box>
+        {hasBars ? (
+          <Svg
+            source={channelBarSvg(c, value)}
+            alt={`${c.toUpperCase()} ${value} of 255`}
+            width={CHANNEL_BAR.width}
+            height={CHANNEL_BAR.height}
+          />
+        ) : null}
+        <Box width={12}>
+          <Input
+            key={c}
+            value={String(value)}
+            placeholder="0–255"
+            submitLabel="set"
+            onSubmit={text =>
+              void editColor(
+                $,
+                cur => {
+                  const n = parseByte(text)
+                  return n === null ? null : withChannel(cur, c, n)
+                },
+                BAD_CHANNEL,
+              )
+            }
+          />
+        </Box>
+        <Button
+          key={`${c}-minus`}
+          label={`−${STEP}`}
+          variant="secondary"
+          dimColor
+          onPress={() => void editColor($, cur => withChannel(cur, c, hexToRgb(cur)[c] - STEP), BAD_CHANNEL)}
+        />
+        <Button
+          key={`${c}-plus`}
+          label={`+${STEP}`}
+          variant="secondary"
+          dimColor
+          onPress={() => void editColor($, cur => withChannel(cur, c, hexToRgb(cur)[c] + STEP), BAD_CHANNEL)}
+        />
+      </Box>
+    )
+
+    // The open tab's RGB card: swatch, hex field, three channel rows, and the last note.
+    const colorCard = (target: BobertoColorTarget) => {
+      const hex = currentHex(attire, target)
+      const rgb = hexToRgb(hex)
+      return (
+        <Box
+          key="color-card"
+          flexDirection="column"
+          gap={1}
+          paddingX={1}
+          paddingY={1}
+          borderStyle="round"
+          borderColor="#2a2833"
+          backgroundColor="#141319"
+        >
+          <Svg
+            source={swatchCardSvg(hex, TARGET_NAMES[target])}
+            alt={`${TARGET_NAMES[target]} color ${hex}`}
+            width={SWATCH_CARD.width}
+            height={SWATCH_CARD.height}
+          />
+          <Input
+            key="hex"
+            label="Hex"
+            value={hex}
+            placeholder="#rrggbb, #rgb or r,g,b"
+            submitLabel="set"
+            onSubmit={value => void editColor($, () => parseColor(value), BAD_COLOR)}
+          />
+          {channelRow('r', rgb.r)}
+          {channelRow('g', rgb.g)}
+          {channelRow('b', rgb.b)}
+          {problem === null ? null : <Text color="#f87171">{problem}</Text>}
+        </Box>
+      )
+    }
+
+    // The open tab's controls: its preset Select(s), then its RGB card when its color is custom.
+    const tabControls = (target: BobertoColorTarget) => {
+      switch (target) {
+        case 'hat':
+          return [
+            <Select
+              key="hat"
+              label="Accessory"
+              options={o.hats.map(h => ({ value: h.id, label: HAT_NAMES[h.id] ?? h.name }))}
+              value={attire.hat}
+              onSelect={value => void dress($, x => ({ ...x, hat: value }))}
+            />,
+            <Select
+              key="hatColor"
+              label="Color"
+              options={[
+                { value: 'auto', label: 'Natural' },
+                ...o.hatColors.map(c => ({ value: c.id, label: HAT_COLOR_NAMES[c.id] ?? c.name })),
+                custom,
+              ]}
+              value={isCustom('hat') ? CUSTOM : (attire.hatHex ?? 'auto')}
+              onSelect={choose('hat')}
+            />,
+          ]
+        case 'skin':
+          return [
+            <Select
+              key="skin"
+              label="Body color"
+              options={[
+                { value: 'auto', label: SKIN_NAMES['auto'] ?? 'Classic' },
+                ...o.skins.map(x => ({ value: x.id, label: SKIN_NAMES[x.id] ?? x.name })),
+                custom,
+              ]}
+              value={presetValue('skin', attire.skin)}
+              onSelect={choose('skin')}
+            />,
+          ]
+        case 'eye':
+          return [
+            <Select
+              key="eye"
+              label="Eye color"
+              options={[
+                { value: 'auto', label: EYE_NAMES['auto'] ?? 'Natural' },
+                ...o.eyes.map(x => ({ value: x.id, label: EYE_NAMES[x.id] ?? x.name })),
+                custom,
+              ]}
+              value={presetValue('eye', attire.eye)}
+              onSelect={choose('eye')}
+            />,
+          ]
+        case 'glow':
+          return [
+            <Select
+              key="glow"
+              label="Glow"
+              options={[...GLOWS, custom]}
+              value={presetValue('glow', attire.glow)}
+              onSelect={choose('glow')}
+            />,
+          ]
+      }
+    }
 
     return (
       <Box flexDirection="column" alignItems="center" paddingY={1} gap={1}>
@@ -598,43 +969,30 @@ export const register: Register = on => {
           {status}
           {isPinned ? ' · preview' : ''}
         </Text>
-        <Button key="wardrobe" label={isOpen ? 'Customize ▴' : 'Customize ▾'} plain dimColor onPress={toggleWardrobe} />
-        {isOpen ? (
-          <Box flexDirection="column" gap={1} width="100%" paddingX={1}>
-            <Select
-              key="hat"
-              label="Accessory"
-              options={o.hats.map(h => ({ value: h.id, label: HAT_NAMES[h.id] ?? h.name }))}
-              value={attire.hat}
-              onSelect={set('hat')}
-            />
-            <Select
-              key="skin"
-              label="Body"
-              options={[
-                { value: 'auto', label: SKIN_NAMES['auto'] },
-                ...o.skins.map(s => ({ value: s.id, label: SKIN_NAMES[s.id] ?? s.name })),
-              ]}
-              value={attire.skin}
-              onSelect={set('skin')}
-            />
-            <Select
-              key="eye"
-              label="Eyes"
-              options={[
-                { value: 'auto', label: EYE_NAMES['auto'] },
-                ...o.eyes.map(x => ({ value: x.id, label: EYE_NAMES[x.id] ?? x.name })),
-              ]}
-              value={attire.eye}
-              onSelect={set('eye')}
-            />
-            <Select key="glow" label="Glow" options={GLOWS} value={attire.glow} onSelect={set('glow')} />
-            <Box flexDirection="row" gap={1} justifyContent="center">
-              <Button key="shuffle" label="Shuffle" variant="primary" onPress={() => void dress($, () => shuffled())} />
-              <Button key="reset" label="Reset" onPress={() => void dress($, () => DEFAULT_OUTFIT)} />
-            </Box>
+        <Box flexDirection="column" gap={1} width="100%" paddingX={1}>
+          {header}
+          <Box key="tabs" flexDirection="row" flexWrap="wrap" gap={1}>
+            {TABS.map(t => (
+              <Button
+                key={`tab-${t}`}
+                label={TARGET_NAMES[t]}
+                {...(t === tab ? { variant: 'primary' as const } : { variant: 'secondary' as const, dimColor: true })}
+                onPress={() => void openTab($, t)}
+              />
+            ))}
           </Box>
-        ) : null}
+          <Box key="tab-body" flexDirection="column" gap={1}>
+            {tabControls(tab)}
+            {isCustom(tab) ? colorCard(tab) : null}
+          </Box>
+          <Text dimColor wrap="truncate">
+            {'─'.repeat(Math.max(8, columns - 2))}
+          </Text>
+          <Box key="footer" flexDirection="row" gap={1} justifyContent="flex-end">
+            <Button key="shuffle" label="Shuffle" variant="primary" onPress={() => void dress($, () => shuffled())} />
+            <Button key="reset" label="Reset" variant="secondary" onPress={() => void resetOutfit($)} />
+          </Box>
+        </Box>
       </Box>
     )
   })
@@ -703,9 +1061,4 @@ export const register: Register = on => {
       </Box>
     )
   })
-}
-
-/** A Select's pick: one field of the outfit. */
-function dressField($: EngineInterface, field: keyof BobertoOutfit, value: string) {
-  return dress($, o => ({ ...o, [field]: value }))
 }
