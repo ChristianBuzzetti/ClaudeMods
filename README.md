@@ -4,6 +4,14 @@ A collection of mods for [Claude Code](https://claude.com/claude-code): plugins 
 
 ![usage-meters panel](mods/usage-meters/assets/panel.svg)
 
+## Meet Boberto
+
+<img src="mods/boberto/assets/pane.svg" alt="Boberto in his pane" width="180"> <img src="mods/boberto/assets/gesture-guitarra.svg" alt="Boberto playing the guitar" width="180"> <img src="mods/boberto/assets/reaction-celebrate.svg" alt="Boberto celebrating an answer" width="120">
+
+Boberto is a small bat-winged mascot who keeps you company while Claude works. He types on his laptop while tools run, picks up a magnifier when Claude reads or searches, celebrates a finished answer, gets dizzy when something fails and naps when the session goes quiet. When he is idle he plays the guitar, rides a skateboard, drinks mate or solves a Rubik's cube.
+
+He is drawn at run time by his own vector engine, not from a sprite sheet. You can dress him up with any of his 32 accessories, a body color, eye color and glow. Every answer ends with a different gesture of his. Open his pane with `/boberto`, and see [his README](mods/boberto) for all the commands.
+
 ## Mods
 
 | Mod | What it does |
